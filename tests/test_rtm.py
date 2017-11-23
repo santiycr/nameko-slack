@@ -1,3 +1,4 @@
+import random
 from eventlet import sleep
 from eventlet.event import Event
 from mock import call, Mock, patch
@@ -199,6 +200,26 @@ class TestHandleEvents:
                 if event.get('type') == 'message'
             ])
 
+    # def test_handle_at_message(self, events, service_runner, tracker):
+
+    #     class Service:
+
+    #         name = 'sample'
+
+    #         @rtm.handle_message(at_response=True)
+    #         def handle_event(self, event, message):
+    #             tracker.handle_event(event, message)
+
+    #     service_runner(Service, events)
+
+    #     assert (
+    #         tracker.handle_event.call_args_list ==
+    #         [
+    #             call(event, event.get('text')) for event in events
+    #             if event.get('type') == 'message' and
+    #             event.get('text').startswith('<@{}>'.format(bot_id))
+    #         ])
+
     def test_handle_message_matching_regex(
         self, make_message_event, service_runner, tracker
     ):
@@ -359,9 +380,10 @@ class TestMultipleBotAccounts:
 
     @pytest.fixture
     def make_client(self):
-        def make(bot_name, token, events):
+        def make(bot_name, bot_id, token, events):
             client = Mock(bot_name=bot_name, token=token)
             client.rtm_read.return_value = events
+            client.api_call.return_value = {'user_id': bot_id}
             return client
         return make
 
@@ -414,6 +436,13 @@ class TestMultipleBotAccounts:
             def handle_ham_and_spam_messages(self, event, message):
                 tracker.handle_spam_and_ham_messages(message)
 
+            @rtm.handle_message(bot_name='Alice', at_response=True)
+            def handle_at_response_messages(self, event, message):
+                tracker.handle_at_response_messages(event, message)
+
+        alice_bot_id = str(random.randrange(100000, 1000000))
+        bob_bot_id = str(random.randrange(100000, 1000000))
+
         alices_events = [
             {'type': 'hello'},
             make_message_event(text='spam ham'),
@@ -421,6 +450,8 @@ class TestMultipleBotAccounts:
             {'type': 'presence_change', 'presence': 'active', 'user': 'A11'},
             {'type': 'presence_change', 'presence': 'away', 'user': 'A00'},
             make_message_event(text='ham spam'),
+            make_message_event(text='<@{}> hello!'.format(alice_bot_id)),
+            make_message_event(text='<@{}> ping!'.format(bob_bot_id)),
         ]
 
         bobs_events = [
@@ -432,8 +463,8 @@ class TestMultipleBotAccounts:
             make_message_event(text='spam egg'),
         ]
 
-        alice = make_client('Alice', 'aaa-111', alices_events)
-        bob = make_client('Bob', 'bbb-222', bobs_events)
+        alice = make_client('Alice', alice_bot_id, 'aaa-111', alices_events)
+        bob = make_client('Bob', bob_bot_id, 'bbb-222', bobs_events)
 
         service_runner(Service, [alice, bob])
 
@@ -472,6 +503,12 @@ class TestMultipleBotAccounts:
         messages = [
             message for args, _ in call_args_list for message in args]
         assert sorted(messages) == ['ham spam', 'spam egg', 'spam ham']
+
+        assert (
+            tracker.handle_at_response_messages.call_args_list ==
+            [
+                call(alices_events[6], alices_events[6]['text'][10:])
+            ])
 
 
 def test_replies_on_handle_message(events, service_runner):

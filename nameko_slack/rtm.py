@@ -46,19 +46,21 @@ class SlackRTMClientManager(SharedExtension, ProviderCollector):
     def start(self):
         for bot_name, client in self.clients.items():
             client.server.rtm_connect()
-            run = partial(self.run, bot_name, client)
+            user_auth = client.api_call("auth.test")
+            bot_id = user_auth['user_id']
+            run = partial(self.run, bot_name, bot_id, client)
             self.container.spawn_managed_thread(run)
 
-    def run(self, bot_name, client):
+    def run(self, bot_name, bot_id, client):
         while True:
             for event in client.rtm_read():
-                self.handle(bot_name, event)
+                self.handle(bot_name, bot_id, event)
             eventlet.sleep(self.read_interval)
 
-    def handle(self, bot_name, event):
+    def handle(self, bot_name, bot_id, event):
         for provider in self._providers:
             if provider.bot_name == bot_name:
-                provider.handle_event(event)
+                provider.handle_event(event, bot_id)
 
     def reply(self, bot_name, event, message):
         client = self.clients[bot_name]
@@ -79,7 +81,7 @@ class RTMEventHandlerEntrypoint(Entrypoint):
     def stop(self):
         self.clients.unregister_provider(self)
 
-    def handle_event(self, event):
+    def handle_event(self, event, bot_id):
         if self.event_type and event.get('type') != self.event_type:
             return
         args = (event,)
@@ -94,25 +96,33 @@ handle_event = RTMEventHandlerEntrypoint.decorator
 
 class RTMMessageHandlerEntrypoint(RTMEventHandlerEntrypoint):
 
-    def __init__(self, message_pattern=None, bot_name=None):
+    def __init__(self, message_pattern=None, bot_name=None, at_response=None):
         self.bot_name = bot_name or constants.DEFAULT_BOT_NAME
+        self.at_response = at_response
         if message_pattern:
             self.message_pattern = re.compile(message_pattern)
         else:
             self.message_pattern = None
 
-    def handle_event(self, event):
+    def handle_event(self, event, bot_id):
         if event.get('type') == EVENT_TYPE_MESSAGE:
+            message = event.get('text', '')
+            if self.at_response:
+                if message.startswith('<@' + bot_id + '>'):
+                    message = message.split('<@' + bot_id + '>', maxsplit=1)[-1].lstrip()
+                else:
+                    return
+
             if self.message_pattern:
-                match = self.message_pattern.match(event.get('text', ''))
+                match = self.message_pattern.match(message)
                 if match:
                     kwargs = match.groupdict()
                     args = () if kwargs else match.groups()
-                    args = (event, event.get('text')) + args
+                    args = (event, message) + args
                 else:
                     return
             else:
-                args = (event, event.get('text'))
+                args = (event, message)
                 kwargs = {}
             context_data = {}
             handle_result = partial(self.handle_result, event)
