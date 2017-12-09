@@ -96,9 +96,11 @@ handle_event = RTMEventHandlerEntrypoint.decorator
 
 class RTMMessageHandlerEntrypoint(RTMEventHandlerEntrypoint):
 
-    def __init__(self, message_pattern=None, bot_name=None, at_response=None):
+    def __init__(self, message_pattern=None, bot_name=None,
+                 at_response=None, ignore_self=True):
         self.bot_name = bot_name or constants.DEFAULT_BOT_NAME
         self.at_response = at_response
+        self.ignore_self = ignore_self
         if message_pattern:
             self.message_pattern = re.compile(message_pattern)
         else:
@@ -107,11 +109,13 @@ class RTMMessageHandlerEntrypoint(RTMEventHandlerEntrypoint):
     def handle_event(self, event, bot_id):
         if event.get('type') == EVENT_TYPE_MESSAGE:
             message = event.get('text', '')
+            if self.ignore_self and event.get('user') == bot_id:
+                return
             if self.at_response:
-                if message.startswith('<@' + bot_id + '>'):
-                    message = message.split('<@' + bot_id + '>', maxsplit=1)[-1].lstrip()
-                else:
+                if not message.startswith('<@' + bot_id + '>'):
                     return
+                message = message.split('<@' + bot_id + '>',
+                                        maxsplit=1)[-1].lstrip()
 
             if self.message_pattern:
                 match = self.message_pattern.match(message)
